@@ -111,6 +111,8 @@ function App() {
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [villages, setVillages] = useState<Village[]>([]);
   const [pumps, setPumps] = useState<Pump[]>([]);
+  const [reportDataError, setReportDataError] =
+    useState("");
 
   const [technicians, setTechnicians] =
     useState<Technician[]>([]);
@@ -381,13 +383,21 @@ function App() {
         "VILLAGE ERROR:",
         villagesResult.error,
       );
-    }
 
-    if (pumpsResult.error) {
+      setReportDataError(
+        "Unable to load villages. Please check your internet connection and try again.",
+      );
+    } else if (pumpsResult.error) {
       console.error(
         "PUMP LIST ERROR:",
         pumpsResult.error,
       );
+
+      setReportDataError(
+        "Unable to load pumps. Please check your internet connection and try again.",
+      );
+    } else {
+      setReportDataError("");
     }
 
     setVillages(villagesResult.data ?? []);
@@ -995,6 +1005,7 @@ function App() {
         villages={villages}
         pumps={pumps}
         incidents={incidents}
+        reportDataError={reportDataError}
         onBack={() => {
           setPage("board");
 
@@ -1283,12 +1294,14 @@ function ReportPage({
   villages,
   pumps,
   incidents,
+  reportDataError,
   onBack,
   onSuccess,
 }: {
   villages: Village[];
   pumps: Pump[];
   incidents: Incident[];
+  reportDataError: string;
   onBack: () => void;
   onSuccess: () => Promise<void>;
 }) {
@@ -1527,6 +1540,18 @@ function ReportPage({
                   </h2>
                 </div>
               </div>
+
+              {reportDataError && (
+                <div className="form-error">
+                  <strong>
+                    Unable to load service data
+                  </strong>
+
+                  <span>
+                    {reportDataError}
+                  </span>
+                </div>
+              )}
 
               <div className="form-group">
                 <label htmlFor="village">
