@@ -2908,5 +2908,4 @@ function IncidentCard({
     </article>
   );
 }
-
 export default App;
