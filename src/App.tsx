@@ -1981,6 +1981,9 @@ function TechnicianPage({
   repairingIncidentId: number | null;
   onBack: () => void;
 }) {
+  const [showTaskLimitDialog, setShowTaskLimitDialog] =
+    useState(false);
+
   const assignedIncidentIds =
     new Set(
       technicianIncidents.map(
@@ -2004,6 +2007,26 @@ function TechnicianPage({
     technicianIncidents.length >=
     maxActiveJobs;
 
+  useEffect(() => {
+    if (!hasReachedJobLimit) {
+      setShowTaskLimitDialog(false);
+      return;
+    }
+
+    setShowTaskLimitDialog(true);
+
+    const timer = window.setTimeout(() => {
+      setShowTaskLimitDialog(false);
+    }, 8000);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [
+    hasReachedJobLimit,
+    selectedTechnicianId,
+  ]);
+
   const getPump = (pumpId: number) =>
     pumps.find(
       (pump) => pump.id === pumpId,
@@ -2011,6 +2034,43 @@ function TechnicianPage({
 
   return (
     <div className="technician-page">
+      {showTaskLimitDialog && (
+        <div className="task-limit-overlay">
+          <div
+            className="task-limit-dialog"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="task-limit-title"
+          >
+            <div className="task-limit-icon">
+              !
+            </div>
+
+            <div>
+              <div className="section-kicker">
+                TASK LIMIT
+              </div>
+
+              <h2 id="task-limit-title">
+                Maximum tasks allocated
+              </h2>
+
+              <p>
+                You already have{" "}
+                <strong>
+                  {technicianIncidents.length} active{" "}
+                  {technicianIncidents.length === 1
+                    ? "task"
+                    : "tasks"}
+                </strong>
+                . Complete one of your current
+                repairs before taking another task.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       <header className="site-header">
         <div className="header-inner">
           <button
