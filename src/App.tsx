@@ -38,6 +38,13 @@ type Incident = {
   };
 };
 
+type BackupPump = {
+  pump_id: number;
+  pump_code: string;
+  village_name: string;
+  distance_km: number;
+};
+
 const ISSUE_LABELS: Record<string, string> = {
   motor_failure: "Motor failure",
   electrical: "Electrical",
@@ -77,6 +84,10 @@ function App() {
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [villages, setVillages] = useState<Village[]>([]);
   const [pumps, setPumps] = useState<Pump[]>([]);
+
+  const [backupPumps, setBackupPumps] = useState<
+    Record<number, BackupPump | null>
+  >({});
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -127,6 +138,7 @@ function App() {
 
     if (pumpIds.length === 0) {
       setIncidents([]);
+      setBackupPumps({});
       setLoading(false);
       return;
     }
@@ -193,6 +205,93 @@ function App() {
     setIncidents(
       combined as unknown as Incident[],
     );
+
+    /*
+     * Load the nearest working backup pump
+     * for every active incident.
+     */
+    const backupEntries =
+      await Promise.all(
+        (incidentData ?? []).map(
+          async (incident) => {
+            const {
+              data,
+              error: backupError,
+            } = await supabase.rpc(
+              "nearest_working_pump",
+              {
+                p_pump_id:
+                  incident.pump_id,
+              },
+            );
+
+            if (backupError) {
+              console.error(
+                "BACKUP PUMP ERROR:",
+                incident.pump_id,
+                backupError,
+              );
+
+              return [
+                incident.id,
+                null,
+              ] as const;
+            }
+
+            const row = Array.isArray(data)
+              ? data[0]
+              : data;
+
+            if (!row) {
+              return [
+                incident.id,
+                null,
+              ] as const;
+            }
+
+            const backup: BackupPump = {
+              pump_id: Number(
+                row.pump_id,
+              ),
+              pump_code: String(
+                row.pump_code,
+              ),
+              village_name: String(
+                row.village_name,
+              ),
+              distance_km: Number(
+                row.distance_km,
+              ),
+            };
+
+            console.log(
+              "BACKUP PUMP:",
+              incident.id,
+              incident.pump_id,
+              backup,
+            );
+
+            return [
+              incident.id,
+              backup,
+            ] as const;
+          },
+        ),
+      );
+
+    const backupMap: Record<
+      number,
+      BackupPump | null
+    > = {};
+
+    for (const [
+      incidentId,
+      backup,
+    ] of backupEntries) {
+      backupMap[incidentId] = backup;
+    }
+
+    setBackupPumps(backupMap);
 
     setLoading(false);
   }
@@ -490,6 +589,9 @@ function App() {
                     <IncidentCard
                       key={incident.id}
                       incident={incident}
+                      backupPump={
+                        backupPumps[incident.id]
+                      }
                     />
                   ),
                 )}
@@ -1139,8 +1241,10 @@ function ReportPage({
 
 function IncidentCard({
   incident,
+  backupPump,
 }: {
   incident: Incident;
+  backupPump?: BackupPump | null;
 }) {
   const village =
     incident.pump?.village?.name ??
@@ -1213,6 +1317,29 @@ function IncidentCard({
           →
         </button>
       </div>
+
+      {backupPump && (
+        <div className="backup-pump">
+          <div className="backup-pump-label">
+            NEAREST WORKING PUMP
+          </div>
+
+          <div className="backup-pump-main">
+            <strong>
+              {backupPump.pump_code}
+            </strong>
+
+            <span>
+              {backupPump.village_name}
+            </span>
+
+            <span className="backup-distance">
+              {backupPump.distance_km.toFixed(1)}{" "}
+              km away
+            </span>
+          </div>
+        </div>
+      )}
     </article>
   );
 }

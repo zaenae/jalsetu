@@ -985,3 +985,40 @@
     gap: 6px;
   }
 }
+ .backup-pump {
+  margin-top: 14px;
+  padding: 12px 0 2px;
+  border-top: 1px solid var(--border);
+  text-align: center;
+}
+
+.backup-pump-label {
+  margin-bottom: 6px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.backup-pump-main {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+
+.backup-pump-main strong {
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.backup-pump-main span {
+  color: var(--muted);
+}
+
+.backup-distance {
+  font-weight: 700;
+  color: var(--blue) !important;
+}
