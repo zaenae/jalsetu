@@ -262,10 +262,6 @@ function App() {
       combined as unknown as Incident[],
     );
 
-    /*
-     * Load the nearest working backup pump
-     * for every active incident.
-     */
     const backupEntries =
       await Promise.all(
         (incidentData ?? []).map(
@@ -1276,8 +1272,7 @@ function App() {
         <div>JalSetu</div>
 
         <span>
-          Public operational status · Updates
-          automatically
+          Developed by Z Ahmed
         </span>
       </footer>
     </div>
@@ -1910,8 +1905,7 @@ function ReportPage({
         <div>JalSetu</div>
 
         <span>
-          Public operational status · Updates
-          automatically
+          Developed by Z Ahmed
         </span>
       </footer>
     </div>
@@ -2252,7 +2246,7 @@ function TechnicianPage({
         <div>JalSetu</div>
 
         <span>
-          Field operations · Technician dispatch
+          Developed by Z Ahmed
         </span>
       </footer>
     </div>
@@ -2719,7 +2713,7 @@ function IncidentCard({
 
       {expanded && (
         <div className="incident-details">
-          <div className="incident-detail-grid">
+          <div className="incident-details-grid">
             <div>
               <span>Village</span>
 
