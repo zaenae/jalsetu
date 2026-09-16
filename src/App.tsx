@@ -1997,6 +1997,13 @@ function TechnicianPage({
         ),
     );
 
+  const maxActiveJobs =
+    selectedTechnician?.max_active_jobs ?? 3;
+
+  const hasReachedJobLimit =
+    technicianIncidents.length >=
+    maxActiveJobs;
+
   const getPump = (pumpId: number) =>
     pumps.find(
       (pump) => pump.id === pumpId,
@@ -2143,6 +2150,25 @@ function TechnicianPage({
               {openIncidents.length} awaiting
             </div>
           </div>
+
+          {hasReachedJobLimit && (
+            <div className="technician-error">
+              <strong>
+                Active task limit reached
+              </strong>
+
+              <span>
+                You already have{" "}
+                {technicianIncidents.length} active{" "}
+                {technicianIncidents.length === 1
+                  ? "task"
+                  : "tasks"}{" "}
+                assigned. Complete one of your
+                current repairs before taking
+                another task.
+              </span>
+            </div>
+          )}
 
           {openIncidents.length === 0 ? (
             <div className="technician-empty">

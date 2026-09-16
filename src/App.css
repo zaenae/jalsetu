@@ -1,3 +1,6 @@
+Yep. **Entire `App.css`, unchanged.** No extra CSS changes, no comments added, no refactoring.
+
+```css
 :root {  
   --ink: #111827;  
   --muted: #667085;  
@@ -1992,3 +1995,4 @@ button {
     font-size: 13px;  
   }  
 }
+```
