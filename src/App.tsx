@@ -21,6 +21,22 @@ type Pump = {
   motor_hp?: number;
   depth_m?: number;
   starter_type?: string;
+  pump_type?: string;
+  installed_year?: number;
+  last_maintenance?: string;
+  spare_parts?: string;
+  households_served?: number;
+  priority?: number;
+};
+
+type Technician = {
+  id: number;
+  name: string;
+  phone: string;
+  is_active: boolean;
+  home_area?: string;
+  specialization?: string;
+  max_active_jobs?: number;
 };
 
 type Incident = {
@@ -30,11 +46,20 @@ type Incident = {
   emergency_tanker: boolean;
   status: Status;
   reported_at: string;
+  resolved_at?: string | null;
+  resolution_note?: string | null;
   pump?: {
     pump_code: string;
     village?: {
       name: string;
     };
+  };
+};
+
+type TechnicianIncident = Incident & {
+  assignment?: {
+    technician_id: number;
+    assigned_at: string;
   };
 };
 
@@ -70,9 +95,11 @@ function getDowntime(date: string) {
   const hours = Math.floor(diff / 3_600_000);
 
   if (hours < 1) return "<1h";
+
   if (hours < 24) return `${hours}h`;
 
   const days = Math.floor(hours / 24);
+
   const remaining = hours % 24;
 
   return remaining === 0
@@ -85,6 +112,15 @@ function App() {
   const [villages, setVillages] = useState<Village[]>([]);
   const [pumps, setPumps] = useState<Pump[]>([]);
 
+  const [technicians, setTechnicians] =
+    useState<Technician[]>([]);
+
+  const [selectedTechnicianId, setSelectedTechnicianId] =
+    useState<number | null>(null);
+
+  const [technicianIncidents, setTechnicianIncidents] =
+    useState<TechnicianIncident[]>([]);
+
   const [backupPumps, setBackupPumps] = useState<
     Record<number, BackupPump | null>
   >({});
@@ -92,9 +128,24 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  const [page, setPage] = useState<"board" | "report">(
-    "board",
-  );
+  const [technicianLoading, setTechnicianLoading] =
+    useState(false);
+
+  const [claimingIncidentId, setClaimingIncidentId] =
+    useState<number | null>(null);
+
+  const [advancingIncidentId, setAdvancingIncidentId] =
+    useState<number | null>(null);
+
+  const [repairingIncidentId, setRepairingIncidentId] =
+    useState<number | null>(null);
+
+  const [technicianError, setTechnicianError] =
+    useState("");
+
+  const [page, setPage] = useState<
+    "board" | "report" | "technician"
+  >("board");
 
   async function loadIncidents() {
     setError("");
@@ -125,6 +176,7 @@ function App() {
       );
 
       setLoading(false);
+
       return;
     }
 
@@ -138,8 +190,11 @@ function App() {
 
     if (pumpIds.length === 0) {
       setIncidents([]);
+
       setBackupPumps({});
+
       setLoading(false);
+
       return;
     }
 
@@ -166,6 +221,7 @@ function App() {
       );
 
       setLoading(false);
+
       return;
     }
 
@@ -313,7 +369,13 @@ function App() {
             is_working,
             motor_hp,
             depth_m,
-            starter_type
+            starter_type,
+            pump_type,
+            installed_year,
+            last_maintenance,
+            spare_parts,
+            households_served,
+            priority
           `)
           .order("pump_code"),
       ]);
@@ -333,12 +395,528 @@ function App() {
     }
 
     setVillages(villagesResult.data ?? []);
+
     setPumps(pumpsResult.data ?? []);
+  }
+
+  async function loadTechnicians() {
+    const {
+      data,
+      error: technicianListError,
+    } = await supabase
+      .from("technicians")
+      .select(`
+        id,
+        name,
+        phone,
+        is_active,
+        home_area,
+        specialization,
+        max_active_jobs
+      `)
+      .eq("is_active", true)
+      .order("name");
+
+    if (technicianListError) {
+      console.error(
+        "TECHNICIAN ERROR:",
+        technicianListError,
+      );
+
+      setTechnicianError(
+        "We couldn't load the technician list.",
+      );
+
+      return;
+    }
+
+    setTechnicians(data ?? []);
+
+    if (
+      selectedTechnicianId === null &&
+      data &&
+      data.length > 0
+    ) {
+      setSelectedTechnicianId(data[0].id);
+    }
+  }
+
+  async function loadTechnicianIncidents(
+    technicianId: number,
+  ) {
+    setTechnicianLoading(true);
+
+    setTechnicianError("");
+
+    const {
+      data: assignmentData,
+      error: assignmentError,
+    } = await supabase
+      .from("incident_assignments")
+      .select(`
+        incident_id,
+        technician_id,
+        assigned_at
+      `)
+      .eq("technician_id", technicianId)
+      .is("released_at", null);
+
+    if (assignmentError) {
+      console.error(
+        "ASSIGNMENT ERROR:",
+        assignmentError,
+      );
+
+      setTechnicianError(
+        "We couldn't load assigned repairs.",
+      );
+
+      setTechnicianLoading(false);
+
+      return;
+    }
+
+    const incidentIds = (
+      assignmentData ?? []
+    ).map(
+      (assignment) =>
+        assignment.incident_id,
+    );
+
+    if (incidentIds.length === 0) {
+      setTechnicianIncidents([]);
+
+      setTechnicianLoading(false);
+
+      return;
+    }
+
+    const {
+      data: assignedIncidentData,
+      error: assignedIncidentError,
+    } = await supabase
+      .from("incidents")
+      .select(`
+        id,
+        pump_id,
+        issue_type,
+        emergency_tanker,
+        status,
+        reported_at,
+        resolved_at,
+        resolution_note
+      `)
+      .in("id", incidentIds)
+      .neq("status", "repaired")
+      .order("reported_at", {
+        ascending: true,
+      });
+
+    if (assignedIncidentError) {
+      console.error(
+        "ASSIGNED INCIDENT ERROR:",
+        assignedIncidentError,
+      );
+
+      setTechnicianError(
+        "We couldn't load your assigned repairs.",
+      );
+
+      setTechnicianLoading(false);
+
+      return;
+    }
+
+    const pumpIds = [
+      ...new Set(
+        (assignedIncidentData ?? []).map(
+          (incident) => incident.pump_id,
+        ),
+      ),
+    ];
+
+    let pumpData: any[] = [];
+
+    if (pumpIds.length > 0) {
+      const {
+        data,
+        error: assignedPumpError,
+      } = await supabase
+        .from("pumps")
+        .select(`
+          id,
+          village_id,
+          pump_code,
+          is_working,
+          motor_hp,
+          depth_m,
+          starter_type,
+          pump_type,
+          installed_year,
+          last_maintenance,
+          spare_parts,
+          households_served,
+          priority,
+          villages (
+            name
+          )
+        `)
+        .in("id", pumpIds);
+
+      if (assignedPumpError) {
+        console.error(
+          "ASSIGNED PUMP ERROR:",
+          assignedPumpError,
+        );
+
+        setTechnicianError(
+          "We couldn't load pump specifications.",
+        );
+
+        setTechnicianLoading(false);
+
+        return;
+      }
+
+      pumpData = data ?? [];
+    }
+
+    const pumpsById = new Map(
+      pumpData.map((pump) => [
+        pump.id,
+        pump,
+      ]),
+    );
+
+    const assignmentByIncident =
+      new Map(
+        (assignmentData ?? []).map(
+          (assignment) => [
+            assignment.incident_id,
+            assignment,
+          ],
+        ),
+      );
+
+    const combined =
+      (assignedIncidentData ?? []).map(
+        (incident) => {
+          const pump = pumpsById.get(
+            incident.pump_id,
+          );
+
+          let village;
+
+          if (pump?.villages) {
+            village = Array.isArray(
+              pump.villages,
+            )
+              ? pump.villages[0]
+              : pump.villages;
+          }
+
+          return {
+            ...incident,
+            pump: pump
+              ? {
+                  pump_code:
+                    pump.pump_code,
+                  village,
+                }
+              : undefined,
+            assignment:
+              assignmentByIncident.get(
+                incident.id,
+              ),
+          };
+        },
+      );
+
+    setTechnicianIncidents(
+      combined as unknown as TechnicianIncident[],
+    );
+
+    setTechnicianLoading(false);
+  }
+
+  async function claimIncident(
+    incidentId: number,
+  ) {
+    if (selectedTechnicianId === null) {
+      return;
+    }
+
+    setClaimingIncidentId(incidentId);
+
+    setTechnicianError("");
+
+    const {
+      data,
+      error: claimError,
+    } = await supabase.rpc(
+      "claim_incident",
+      {
+        p_incident_id: incidentId,
+        p_technician_id:
+          selectedTechnicianId,
+      },
+    );
+
+    setClaimingIncidentId(null);
+
+    if (claimError) {
+      console.error(
+        "CLAIM ERROR:",
+        claimError,
+      );
+
+      setTechnicianError(
+        "The repair could not be claimed. Please try again.",
+      );
+
+      return;
+    }
+
+    const result = Array.isArray(data)
+      ? data[0]
+      : data;
+
+    if (
+      result?.success === false
+    ) {
+      const reason =
+        result?.reason ??
+        "incident_not_claimable";
+
+      if (
+        reason ===
+        "incident_not_claimable"
+      ) {
+        setTechnicianError(
+          "This incident is no longer available. Another technician may have claimed it.",
+        );
+      } else {
+        setTechnicianError(
+          "This incident could not be claimed.",
+        );
+      }
+
+      await loadIncidents();
+
+      await loadTechnicianIncidents(
+        selectedTechnicianId,
+      );
+
+      return;
+    }
+
+    await loadIncidents();
+
+    await loadTechnicianIncidents(
+      selectedTechnicianId,
+    );
+  }
+
+  async function advanceIncidentToParts(
+    incidentId: number,
+  ) {
+    if (selectedTechnicianId === null) {
+      return;
+    }
+
+    setAdvancingIncidentId(incidentId);
+
+    setTechnicianError("");
+
+    const {
+      data,
+      error: rpcError,
+    } = await supabase.rpc(
+      "advance_incident_to_parts",
+      {
+        p_incident_id: incidentId,
+        p_technician_id:
+          selectedTechnicianId,
+      },
+    );
+
+    setAdvancingIncidentId(null);
+
+    if (rpcError) {
+      console.error(
+        "PARTS SOURCED ERROR:",
+        rpcError,
+      );
+
+      setTechnicianError(
+        "The incident could not be moved to parts sourced.",
+      );
+
+      return;
+    }
+
+    const result = Array.isArray(data)
+      ? data[0]
+      : data;
+
+    if (result?.success === false) {
+      const reason =
+        result?.reason ??
+        "incident_not_ready";
+
+      if (
+        reason ===
+        "technician_not_assigned"
+      ) {
+        setTechnicianError(
+          "You are not assigned to this repair.",
+        );
+      } else if (
+        reason ===
+        "incident_not_found"
+      ) {
+        setTechnicianError(
+          "This incident no longer exists.",
+        );
+      } else {
+        setTechnicianError(
+          "This incident could not be updated.",
+        );
+      }
+
+      await loadIncidents();
+
+      await loadTechnicianIncidents(
+        selectedTechnicianId,
+      );
+
+      return;
+    }
+
+    await loadIncidents();
+
+    await loadTechnicianIncidents(
+      selectedTechnicianId,
+    );
+  }
+
+  async function repairIncident(
+    incidentId: number,
+    resolutionNote: string,
+  ) {
+    if (selectedTechnicianId === null) {
+      return;
+    }
+
+    const trimmedNote =
+      resolutionNote.trim();
+
+    if (!trimmedNote) {
+      setTechnicianError(
+        "Add a resolution note before marking the pump repaired.",
+      );
+
+      return;
+    }
+
+    setRepairingIncidentId(incidentId);
+
+    setTechnicianError("");
+
+    const {
+      data,
+      error: rpcError,
+    } = await supabase.rpc(
+      "repair_incident",
+      {
+        p_incident_id: incidentId,
+        p_technician_id:
+          selectedTechnicianId,
+        p_resolution_note:
+          trimmedNote,
+      },
+    );
+
+    setRepairingIncidentId(null);
+
+    if (rpcError) {
+      console.error(
+        "REPAIR ERROR:",
+        rpcError,
+      );
+
+      setTechnicianError(
+        "The repair could not be completed. Please try again.",
+      );
+
+      return;
+    }
+
+    const result = Array.isArray(data)
+      ? data[0]
+      : data;
+
+    if (result?.success === false) {
+      const reason =
+        result?.reason ??
+        "repair_failed";
+
+      if (
+        reason ===
+        "technician_not_assigned"
+      ) {
+        setTechnicianError(
+          "You are not assigned to this repair.",
+        );
+      } else if (
+        reason ===
+        "resolution_note_required"
+      ) {
+        setTechnicianError(
+          "Add a resolution note before completing the repair.",
+        );
+      } else if (
+        reason ===
+        "incident_not_ready_for_repair"
+      ) {
+        setTechnicianError(
+          "This incident is not ready to be marked repaired.",
+        );
+      } else if (
+        reason ===
+        "incident_not_found"
+      ) {
+        setTechnicianError(
+          "This incident no longer exists.",
+        );
+      } else {
+        setTechnicianError(
+          "This repair could not be completed.",
+        );
+      }
+
+      await loadIncidents();
+
+      await loadTechnicianIncidents(
+        selectedTechnicianId,
+      );
+
+      return;
+    }
+
+    await loadIncidents();
+
+    await loadTechnicianIncidents(
+      selectedTechnicianId,
+    );
   }
 
   useEffect(() => {
     loadIncidents();
+
     loadReportData();
+
+    loadTechnicians();
 
     const channel = supabase
       .channel("jalsetu-live-incidents")
@@ -351,6 +929,14 @@ function App() {
         },
         () => {
           loadIncidents();
+
+          if (
+            selectedTechnicianId !== null
+          ) {
+            loadTechnicianIncidents(
+              selectedTechnicianId,
+            );
+          }
         },
       )
       .subscribe();
@@ -359,6 +945,20 @@ function App() {
       supabase.removeChannel(channel);
     };
   }, []);
+
+  useEffect(() => {
+    if (
+      page === "technician" &&
+      selectedTechnicianId !== null
+    ) {
+      loadTechnicianIncidents(
+        selectedTechnicianId,
+      );
+    }
+  }, [
+    page,
+    selectedTechnicianId,
+  ]);
 
   const sortedIncidents = useMemo(() => {
     return [...incidents].sort((a, b) => {
@@ -386,6 +986,13 @@ function App() {
       incident.status === "reported",
   ).length;
 
+  const selectedTechnician =
+    technicians.find(
+      (technician) =>
+        technician.id ===
+        selectedTechnicianId,
+    );
+
   if (page === "report") {
     return (
       <ReportPage
@@ -394,10 +1001,62 @@ function App() {
         incidents={incidents}
         onBack={() => {
           setPage("board");
+
           loadIncidents();
         }}
         onSuccess={async () => {
           await loadIncidents();
+        }}
+      />
+    );
+  }
+
+  if (page === "technician") {
+    return (
+      <TechnicianPage
+        technicians={technicians}
+        selectedTechnician={
+          selectedTechnician
+        }
+        selectedTechnicianId={
+          selectedTechnicianId
+        }
+        onTechnicianChange={(
+          technicianId,
+        ) => {
+          setSelectedTechnicianId(
+            technicianId,
+          );
+        }}
+        incidents={sortedIncidents}
+        technicianIncidents={
+          technicianIncidents
+        }
+        pumps={pumps}
+        loading={technicianLoading}
+        error={technicianError}
+        claimingIncidentId={
+          claimingIncidentId
+        }
+        onClaimIncident={
+          claimIncident
+        }
+        onAdvanceToParts={
+          advanceIncidentToParts
+        }
+        advancingIncidentId={
+          advancingIncidentId
+        }
+        onRepairIncident={
+          repairIncident
+        }
+        repairingIncidentId={
+          repairingIncidentId
+        }
+        onBack={() => {
+          setPage("board");
+
+          loadIncidents();
         }}
       />
     );
@@ -428,9 +1087,21 @@ function App() {
             </div>
           </button>
 
-          <div className="live-status">
-            <span className="live-dot" />
-            <span>LIVE</span>
+          <div className="header-actions">
+            <button
+              className="technician-link"
+              onClick={() =>
+                setPage("technician")
+              }
+            >
+              Technician view
+            </button>
+
+            <div className="live-status">
+              <span className="live-dot" />
+
+              <span>LIVE</span>
+            </div>
           </div>
         </div>
       </header>
@@ -461,6 +1132,7 @@ function App() {
               onClick={() => setPage("report")}
             >
               Report a breakdown
+
               <span>→</span>
             </button>
           </div>
@@ -779,6 +1451,7 @@ function ReportPage({
 
           <div className="live-status">
             <span className="live-dot" />
+
             <span>LIVE</span>
           </div>
         </div>
@@ -837,6 +1510,7 @@ function ReportPage({
               onClick={onBack}
             >
               Return to service status
+
               <span>→</span>
             </button>
           </div>
@@ -871,7 +1545,9 @@ function ReportPage({
                     setVillageId(
                       event.target.value,
                     );
+
                     setPumpId("");
+
                     setError("");
                   }}
                 >
@@ -905,6 +1581,7 @@ function ReportPage({
                     setPumpId(
                       event.target.value,
                     );
+
                     setError("");
                   }}
                 >
@@ -929,6 +1606,7 @@ function ReportPage({
                           value={pump.id}
                         >
                           {pump.pump_code}
+
                           {hasIncident
                             ? " — active breakdown"
                             : ""}
@@ -1039,6 +1717,7 @@ function ReportPage({
                       }`}
                       onClick={() => {
                         setIssueType(value);
+
                         setError("");
                       }}
                     >
@@ -1239,6 +1918,711 @@ function ReportPage({
   );
 }
 
+function TechnicianPage({
+  technicians,
+  selectedTechnician,
+  selectedTechnicianId,
+  onTechnicianChange,
+  incidents,
+  technicianIncidents,
+  pumps,
+  loading,
+  error,
+  claimingIncidentId,
+  onClaimIncident,
+  onAdvanceToParts,
+  advancingIncidentId,
+  onRepairIncident,
+  repairingIncidentId,
+  onBack,
+}: {
+  technicians: Technician[];
+  selectedTechnician?: Technician;
+  selectedTechnicianId: number | null;
+  onTechnicianChange: (
+    technicianId: number,
+  ) => void;
+  incidents: Incident[];
+  technicianIncidents: TechnicianIncident[];
+  pumps: Pump[];
+  loading: boolean;
+  error: string;
+  claimingIncidentId: number | null;
+  onClaimIncident: (
+    incidentId: number,
+  ) => Promise<void>;
+  onAdvanceToParts: (
+    incidentId: number,
+  ) => Promise<void>;
+  advancingIncidentId: number | null;
+  onRepairIncident: (
+    incidentId: number,
+    resolutionNote: string,
+  ) => Promise<void>;
+  repairingIncidentId: number | null;
+  onBack: () => void;
+}) {
+  const assignedIncidentIds =
+    new Set(
+      technicianIncidents.map(
+        (incident) => incident.id,
+      ),
+    );
+
+  const openIncidents =
+    incidents.filter(
+      (incident) =>
+        incident.status === "reported" &&
+        !assignedIncidentIds.has(
+          incident.id,
+        ),
+    );
+
+  const getPump = (pumpId: number) =>
+    pumps.find(
+      (pump) => pump.id === pumpId,
+    );
+
+  return (
+    <div className="technician-page">
+      <header className="site-header">
+        <div className="header-inner">
+          <button
+            className="brand-button"
+            onClick={onBack}
+          >
+            <div className="brand-group">
+              <div className="brand-mark">
+                J
+              </div>
+
+              <div>
+                <div className="brand-name">
+                  JalSetu
+                </div>
+
+                <div className="brand-caption">
+                  Water service network
+                </div>
+              </div>
+            </div>
+          </button>
+
+          <div className="live-status">
+            <span className="live-dot" />
+
+            <span>TECHNICIAN</span>
+          </div>
+        </div>
+      </header>
+
+      <main className="technician-main">
+        <button
+          className="back-link"
+          onClick={onBack}
+        >
+          ← Public service status
+        </button>
+
+        <section className="technician-hero">
+          <div>
+            <div className="section-kicker">
+              FIELD OPERATIONS
+            </div>
+
+            <h1>
+              Technician
+              <br />
+              dispatch.
+            </h1>
+
+            <p>
+              Claim active breakdowns and
+              access the pump information
+              needed for the repair.
+            </p>
+          </div>
+
+          <div className="technician-selector">
+            <label htmlFor="technician">
+              TECHNICIAN
+            </label>
+
+            <select
+              id="technician"
+              value={
+                selectedTechnicianId ?? ""
+              }
+              onChange={(event) =>
+                onTechnicianChange(
+                  Number(event.target.value),
+                )
+              }
+            >
+              <option value="">
+                Select technician
+              </option>
+
+              {technicians.map(
+                (technician) => (
+                  <option
+                    key={technician.id}
+                    value={technician.id}
+                  >
+                    {technician.name}
+                  </option>
+                ),
+              )}
+            </select>
+
+            {selectedTechnician && (
+              <div className="technician-context">
+                <strong>
+                  {selectedTechnician.name}
+                </strong>
+
+                <span>
+                  {selectedTechnician.home_area ??
+                    "Service area"}
+                </span>
+
+                {selectedTechnician.specialization && (
+                  <span>
+                    {
+                      selectedTechnician.specialization
+                    }
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+        </section>
+
+        {error && (
+          <div className="technician-error">
+            <strong>
+              Technician view unavailable
+            </strong>
+
+            <span>{error}</span>
+          </div>
+        )}
+
+        <section className="technician-section">
+          <div className="section-header">
+            <div>
+              <div className="section-kicker">
+                DISPATCH QUEUE
+              </div>
+
+              <h2>
+                Open breakdowns
+              </h2>
+            </div>
+
+            <div className="incident-count">
+              {openIncidents.length} awaiting
+            </div>
+          </div>
+
+          {openIncidents.length === 0 ? (
+            <div className="technician-empty">
+              <div className="state-icon success">
+                ✓
+              </div>
+
+              <strong>
+                No unassigned breakdowns
+              </strong>
+
+              <span>
+                All currently reported
+                incidents have been assigned.
+              </span>
+            </div>
+          ) : (
+            <div className="technician-incident-list">
+              {openIncidents.map(
+                (incident) => {
+                  const pump = getPump(
+                    incident.pump_id,
+                  );
+
+                  return (
+                    <TechnicianIncidentCard
+                      key={incident.id}
+                      incident={incident}
+                      pump={pump}
+                      claiming={
+                        claimingIncidentId ===
+                        incident.id
+                      }
+                      onClaim={() =>
+                        onClaimIncident(
+                          incident.id,
+                        )
+                      }
+                    />
+                  );
+                },
+              )}
+            </div>
+          )}
+        </section>
+
+        <section className="technician-section">
+          <div className="section-header">
+            <div>
+              <div className="section-kicker">
+                MY REPAIRS
+              </div>
+
+              <h2>
+                Assigned jobs
+              </h2>
+            </div>
+
+            <div className="incident-count">
+              {technicianIncidents.length} active
+            </div>
+          </div>
+
+          {loading ? (
+            <div className="technician-empty">
+              <div className="loading-spinner" />
+
+              <strong>
+                Loading assigned repairs
+              </strong>
+
+              <span>
+                Checking the current dispatch
+                list…
+              </span>
+            </div>
+          ) : technicianIncidents.length ===
+            0 ? (
+            <div className="technician-empty">
+              <div className="state-icon">
+                —
+              </div>
+
+              <strong>
+                No active assignments
+              </strong>
+
+              <span>
+                Claim a breakdown above to add
+                it to your repair list.
+              </span>
+            </div>
+          ) : (
+            <div className="technician-incident-list">
+              {technicianIncidents.map(
+                (incident) => (
+                  <AssignedIncidentCard
+                    key={incident.id}
+                    incident={incident}
+                    pump={getPump(
+                      incident.pump_id,
+                    )}
+                    onAdvanceToParts={
+                      onAdvanceToParts
+                    }
+                    advancing={
+                      advancingIncidentId ===
+                      incident.id
+                    }
+                    onRepairIncident={
+                      onRepairIncident
+                    }
+                    repairing={
+                      repairingIncidentId ===
+                      incident.id
+                    }
+                  />
+                ),
+              )}
+            </div>
+          )}
+        </section>
+      </main>
+
+      <footer className="site-footer">
+        <div>JalSetu</div>
+
+        <span>
+          Field operations · Technician dispatch
+        </span>
+      </footer>
+    </div>
+  );
+}
+
+function TechnicianIncidentCard({
+  incident,
+  pump,
+  claiming,
+  onClaim,
+}: {
+  incident: Incident;
+  pump?: Pump;
+  claiming: boolean;
+  onClaim: () => Promise<void>;
+}) {
+  const village =
+    incident.pump?.village?.name ??
+    "Unknown village";
+
+  const issue =
+    ISSUE_LABELS[
+      incident.issue_type
+    ] ?? incident.issue_type;
+
+  return (
+    <article className="technician-incident-card">
+      <div className="technician-incident-top">
+        <div>
+          <div className="incident-location">
+            <span className="location-dot" />
+
+            {village}
+          </div>
+
+          <h3>
+            {pump?.pump_code ??
+              incident.pump?.pump_code ??
+              "Unknown pump"}
+          </h3>
+
+          <p>{issue}</p>
+        </div>
+
+        {incident.emergency_tanker && (
+          <div className="tanker-badge">
+            <span>●</span>
+
+            TANKER NEEDED
+          </div>
+        )}
+      </div>
+
+      <div className="technician-spec-grid">
+        <div>
+          <span>Motor</span>
+
+          <strong>
+            {pump?.motor_hp
+              ? `${pump.motor_hp} HP`
+              : "—"}
+          </strong>
+        </div>
+
+        <div>
+          <span>Depth</span>
+
+          <strong>
+            {pump?.depth_m
+              ? `${pump.depth_m} m`
+              : "—"}
+          </strong>
+        </div>
+
+        <div>
+          <span>Starter</span>
+
+          <strong>
+            {pump?.starter_type ?? "—"}
+          </strong>
+        </div>
+
+        <div>
+          <span>Pump type</span>
+
+          <strong>
+            {pump?.pump_type ?? "—"}
+          </strong>
+        </div>
+      </div>
+
+      {pump?.spare_parts && (
+        <div className="spare-parts-preview">
+          <span>SPARE PARTS</span>
+
+          <strong>
+            {pump.spare_parts}
+          </strong>
+        </div>
+      )}
+
+      <div className="technician-incident-footer">
+        <div>
+          <span>Downtime</span>
+
+          <strong>
+            {getDowntime(
+              incident.reported_at,
+            )}
+          </strong>
+        </div>
+
+        <button
+          className="claim-button"
+          onClick={onClaim}
+          disabled={claiming}
+        >
+          {claiming
+            ? "Claiming…"
+            : "Claim repair →"}
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function AssignedIncidentCard({
+  incident,
+  pump,
+  onAdvanceToParts,
+  advancing,
+  onRepairIncident,
+  repairing,
+}: {
+  incident: TechnicianIncident;
+  pump?: Pump;
+  onAdvanceToParts: (
+    incidentId: number,
+  ) => Promise<void>;
+  advancing: boolean;
+  onRepairIncident: (
+    incidentId: number,
+    resolutionNote: string,
+  ) => Promise<void>;
+  repairing: boolean;
+}) {
+  const [showRepairForm, setShowRepairForm] =
+    useState(false);
+
+  const [resolutionNote, setResolutionNote] =
+    useState("");
+
+  const village =
+    incident.pump?.village?.name ??
+    "Unknown village";
+
+  const issue =
+    ISSUE_LABELS[
+      incident.issue_type
+    ] ?? incident.issue_type;
+
+  function openRepairForm() {
+    setResolutionNote("");
+
+    setShowRepairForm(true);
+  }
+
+  function cancelRepair() {
+    if (repairing) {
+      return;
+    }
+
+    setResolutionNote("");
+
+    setShowRepairForm(false);
+  }
+
+  async function submitRepair() {
+    const note =
+      resolutionNote.trim();
+
+    if (!note) {
+      return;
+    }
+
+    await onRepairIncident(
+      incident.id,
+      note,
+    );
+
+    setResolutionNote("");
+
+    setShowRepairForm(false);
+  }
+
+  return (
+    <article className="technician-incident-card assigned-job">
+      <div className="technician-incident-top">
+        <div>
+          <div className="incident-location">
+            <span className="location-dot" />
+
+            {village}
+          </div>
+
+          <h3>
+            {pump?.pump_code ??
+              incident.pump?.pump_code ??
+              "Unknown pump"}
+          </h3>
+
+          <p>{issue}</p>
+        </div>
+
+        <div
+          className={`assigned-status ${
+            incident.status ===
+            "parts_sourced"
+              ? "parts-sourced-status"
+              : ""
+          }`}
+        >
+          {STATUS_LABELS[
+            incident.status
+          ]}
+        </div>
+      </div>
+
+      <div className="technician-spec-grid">
+        <div>
+          <span>Motor</span>
+
+          <strong>
+            {pump?.motor_hp
+              ? `${pump.motor_hp} HP`
+              : "—"}
+          </strong>
+        </div>
+
+        <div>
+          <span>Depth</span>
+
+          <strong>
+            {pump?.depth_m
+              ? `${pump.depth_m} m`
+              : "—"}
+          </strong>
+        </div>
+
+        <div>
+          <span>Starter</span>
+
+          <strong>
+            {pump?.starter_type ?? "—"}
+          </strong>
+        </div>
+
+        <div>
+          <span>Pump type</span>
+
+          <strong>
+            {pump?.pump_type ?? "—"}
+          </strong>
+        </div>
+      </div>
+
+      {pump?.spare_parts && (
+        <div className="spare-parts-preview">
+          <span>SPARE PARTS CHECKLIST</span>
+
+          <strong>
+            {pump.spare_parts}
+          </strong>
+        </div>
+      )}
+
+      <div className="assigned-job-footer">
+        <span>
+          Assigned{" "}
+          {incident.assignment?.assigned_at
+            ? getDowntime(
+                incident.assignment
+                  .assigned_at,
+              ) + " ago"
+            : ""}
+        </span>
+
+        {incident.status ===
+          "assigned" && (
+          <button
+            className="claim-button"
+            onClick={() =>
+              onAdvanceToParts(
+                incident.id,
+              )
+            }
+            disabled={advancing}
+          >
+            {advancing
+              ? "Updating…"
+              : "Parts sourced →"}
+          </button>
+        )}
+
+        {incident.status ===
+          "parts_sourced" &&
+          !showRepairForm && (
+            <button
+              className="claim-button"
+              onClick={openRepairForm}
+              disabled={repairing}
+            >
+              Mark repaired →
+            </button>
+          )}
+      </div>
+
+      {showRepairForm && (
+        <div className="repair-controls">
+          <label
+            className="repair-note-label"
+            htmlFor={`resolution-${incident.id}`}
+          >
+            RESOLUTION NOTE
+          </label>
+
+          <textarea
+            id={`resolution-${incident.id}`}
+            className="repair-note-input"
+            value={resolutionNote}
+            onChange={(event) =>
+              setResolutionNote(
+                event.target.value,
+              )
+            }
+            placeholder="Describe what was repaired or replaced."
+            disabled={repairing}
+          />
+
+          <div className="repair-note-actions">
+            <button
+              type="button"
+              className="repair-cancel-button"
+              onClick={cancelRepair}
+              disabled={repairing}
+            >
+              Cancel
+            </button>
+
+            <button
+              type="button"
+              className="repair-complete-button"
+              onClick={submitRepair}
+              disabled={
+                repairing ||
+                !resolutionNote.trim()
+              }
+            >
+              {repairing
+                ? "Completing repair…"
+                : "Mark repaired"}
+            </button>
+          </div>
+        </div>
+      )}
+    </article>
+  );
+}
+
 function IncidentCard({
   incident,
   backupPump,
@@ -1246,6 +2630,9 @@ function IncidentCard({
   incident: Incident;
   backupPump?: BackupPump | null;
 }) {
+  const [expanded, setExpanded] =
+    useState(false);
+
   const village =
     incident.pump?.village?.name ??
     "Unknown village";
@@ -1271,6 +2658,7 @@ function IncidentCard({
         <div className="incident-heading">
           <div className="incident-location">
             <span className="location-dot" />
+
             {village}
           </div>
 
@@ -1282,6 +2670,7 @@ function IncidentCard({
         {incident.emergency_tanker && (
           <div className="tanker-badge">
             <span>●</span>
+
             TANKER NEEDED
           </div>
         )}
@@ -1312,32 +2701,103 @@ function IncidentCard({
 
         <button
           className="incident-arrow"
-          aria-label="View incident"
+          aria-label={
+            expanded
+              ? "Hide incident details"
+              : "View incident details"
+          }
+          aria-expanded={expanded}
+          onClick={() =>
+            setExpanded(
+              (current) => !current,
+            )
+          }
         >
-          →
+          {expanded ? "↑" : "→"}
         </button>
       </div>
 
-      {backupPump && (
-        <div className="backup-pump">
-          <div className="backup-pump-label">
-            NEAREST WORKING PUMP
+      {expanded && (
+        <div className="incident-details">
+          <div className="incident-detail-grid">
+            <div>
+              <span>Village</span>
+
+              <strong>{village}</strong>
+            </div>
+
+            <div>
+              <span>Pump</span>
+
+              <strong>{pump}</strong>
+            </div>
+
+            <div>
+              <span>Problem</span>
+
+              <strong>{issue}</strong>
+            </div>
+
+            <div>
+              <span>Water support</span>
+
+              <strong>
+                {incident.emergency_tanker
+                  ? "Emergency tanker required"
+                  : "No tanker requested"}
+              </strong>
+            </div>
+
+            <div>
+              <span>Reported</span>
+
+              <strong>
+                {new Date(
+                  incident.reported_at,
+                ).toLocaleString()}
+              </strong>
+            </div>
+
+            <div>
+              <span>Current status</span>
+
+              <strong>
+                {STATUS_LABELS[
+                  incident.status
+                ]}
+              </strong>
+            </div>
           </div>
 
-          <div className="backup-pump-main">
-            <strong>
-              {backupPump.pump_code}
-            </strong>
+          {backupPump && (
+            <div className="backup-pump">
+              <div className="backup-pump-label">
+                NEAREST WORKING PUMP
+              </div>
 
-            <span>
-              {backupPump.village_name}
-            </span>
+              <div className="backup-pump-main">
+                <strong>
+                  {backupPump.pump_code}
+                </strong>
 
-            <span className="backup-distance">
-              {backupPump.distance_km.toFixed(1)}{" "}
-              km away
-            </span>
-          </div>
+                <span>
+                  {backupPump.village_name}
+                </span>
+
+                <span className="backup-distance">
+                  {backupPump.distance_km.toFixed(1)}{" "}
+                  km away
+                </span>
+              </div>
+            </div>
+          )}
+
+          {!backupPump && (
+            <div className="incident-no-backup">
+              No nearby working backup pump is
+              currently available.
+            </div>
+          )}
         </div>
       )}
     </article>
